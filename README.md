@@ -38,6 +38,8 @@ GC的开销在所有居于JVM的application中都是不可忽视的并且tuning�
 
 ### Tungsten的内存管理机制 ###
 
+![Memory Management](https://github.com/hustnn/TungstenSecret/blob/master/images/memory-tungsten.png)
+
 ### 基于Tungsten内存管理的应用 ###
 
 unsafe.memory.TaskMemoryManager  按照pagetable的方式对heap或者off-heap的memory进行统一管理
