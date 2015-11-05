@@ -1,6 +1,44 @@
-## 探索Spark Tungsten的秘密 ##
+# 探索Spark Tungsten的秘密 #
 
-Spark Tungsten是databricks近期提出来的提升Spark性能的最新计划。 我们知道由于Spark是由scala开发的，JVM的实现带来了一些性能上的限制和弊端（例如GC上的overhead），使得Spark在性能上无法和一些更加底层的语言（例如c，可以对memory进行高效管理，从而利用hardware的特性）相媲美。 基于此，Tungsten就诞生了，
+Spark Tungsten是databricks近期提出来的提升Spark性能的最新计划。 我们知道由于Spark是由scala开发的，JVM的实现带来了一些性能上的限制和弊端（例如GC上的overhead），使得Spark在性能上无法和一些更加底层的语言（例如c，可以对memory进行高效管理，从而利用hardware的特性）相媲美。 基于此，Tungsten就诞生了，从memory和cpu层面对spark的性能进行优化。 该项目的官方介绍详见[https://databricks.com/blog/2015/04/28/project-tungsten-bringing-spark-closer-to-bare-metal.html](https://databricks.com/blog/2015/04/28/project-tungsten-bringing-spark-closer-to-bare-metal.html "Project Tungsten: Bringing Spark Closer to Bare Metal")。 Tungsten的优化主要包括三个方面：memory management and binary processing，cache-aware computation， code generation。 官方已经对各个方面可以做的优化进行了介绍，这里我们将走进各个方面，详细介绍工作原理，优化细节以及代码实现。
+
+## 概述 ##
+官方对于Tungsten的三方面优化的概述
+
+1. Memory Management and Binary Processing: application显示的对内存进行高效的管理以消除JVM对象模型和垃圾回收的开销；
+2. Cache-aware computation：设计算法和数据结构以充分利用memory hierarchy
+3. Code generation：使用code generation去充分利用最新的编译器和CPUs的性能
+
+## Memory Management and Binary Processing ##
+Tungsten设计了一套内存管理机制，而不再是交给JVM托管，Spark的operation直接使用分配的binary data而不是JVM objects。 这个章节，我们先详细介绍Tungsten的内存管理机制，然后分析下spark上的一些常用的operation如何基于新的内存管理机制实现它们的功能。
+
+### 新内存管理机制诞生的Motivation ###
+
+催生Tungsten内存管理机制的原因主要是JVM在内存方面的overhead。
+
+1. JVM object model内存开销
+
+官方网站给出了一个很简单的字符串“abcd”的JVM object layout。
+
+    java.lang.String object internals:
+	OFFSET  SIZE   TYPE DESCRIPTION                VALUE
+     0     4        (object header)                ...
+     4     4        (object header)                ...
+     8     4        (object header)                ...
+    12     4 char[] String.value                   []
+    16     4    int String.hash                    0
+    20     4    int String.hash32                  0
+	Instance size: 24 bytes (reported by Instrumentation API)
+
+一个简单的4 bytes的字符串在JVM object model中居然需要48 bytes的内存。 可见我们需要抛弃JVM object，而像C语言那样直接操作分配的binary data。
+
+2. Garbage collection的开销
+
+GC的开销在所有居于JVM的application中都是不可忽视的并且tuning也十分繁琐，作为一个高效的In-memory processing framework，很多基于jvm的work都已经在底层直接写内存管理模块。 同理，spark想要想要在性能上有突破，需要对memory进行高效管理。
+
+### Tungsten的内存管理机制 ###
+
+### 基于Tungsten内存管理的应用 ###
 
 unsafe.memory.TaskMemoryManager  按照pagetable的方式对heap或者off-heap的memory进行统一管理
 
@@ -143,4 +181,4 @@ Cache-aware computation主要是相对于In-memory computation，L1/L2/L3 CPU ca
 
 # Tungsten Code Generation 机制 #
 
-to do.
+GenerateUnsafeProjection -- projects any internal row data structure directly into bytes (UnsafeRow).
