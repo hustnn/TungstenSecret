@@ -18,21 +18,22 @@ Tungsten设计了一套内存管理机制，而不再是交给JVM托管，Spark�
 
 1. JVM object model内存开销
 
-官方网站给出了一个很简单的字符串“abcd”的JVM object layout。
-
-    java.lang.String object internals:
-	OFFSET  SIZE   TYPE DESCRIPTION                VALUE
-     0     4        (object header)                ...
-     4     4        (object header)                ...
-     8     4        (object header)                ...
-    12     4 char[] String.value                   []
-    16     4    int String.hash                    0
-    20     4    int String.hash32                  0
-	Instance size: 24 bytes (reported by Instrumentation API)
-
-一个简单的4 bytes的字符串在JVM object model中居然需要48 bytes的内存。 可见我们需要抛弃JVM object，而像C语言那样直接操作分配的binary data。
+	官方网站给出了一个很简单的字符串“abcd”的JVM object layout。
+	
+	    java.lang.String object internals:
+		OFFSET  SIZE   TYPE DESCRIPTION                VALUE
+	     0     4        (object header)                ...
+	     4     4        (object header)                ...
+	     8     4        (object header)                ...
+	    12     4 char[] String.value                   []
+	    16     4    int String.hash                    0
+	    20     4    int String.hash32                  0
+		Instance size: 24 bytes (reported by Instrumentation API)
+	
+	一个简单的4 bytes的字符串在JVM object model中居然需要48 bytes的内存。 可见我们需要抛弃JVM object，而像C语言那样直接操作分配的binary data。
 
 2. Garbage collection的开销
+
 
 GC的开销在所有居于JVM的application中都是不可忽视的并且tuning也十分繁琐，作为一个高效的In-memory processing framework，很多基于jvm的work都已经在底层直接写内存管理模块。 同理，spark想要想要在性能上有突破，需要对memory进行高效管理。
 
