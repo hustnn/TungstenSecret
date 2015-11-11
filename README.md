@@ -185,3 +185,4 @@ Cache-aware computation主要是相对于In-memory computation，L1/L2/L3 CPU ca
 # Tungsten Code Generation 机制 #
 
 GenerateUnsafeProjection -- projects any internal row data structure directly into bytes (UnsafeRow).
+ConvertToUnsafe将Java-object-based row转换为UnSafeRow，具体的转换则是在GenerateUnsafeProjection实现。 代码的生成同样也利用的Java Unsafe对memory直接操作来避免JVM object model的overhead。
