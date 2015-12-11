@@ -39,7 +39,156 @@ GC的开销在所有居于JVM的application中都是不可忽视的并且tuning�
 
 ### Tungsten的内存管理机制 ###
 
+内存管理必然涉及寻址，在介绍Tungsten的内存管理机制之前，我们先来看看内存地址的表示方式。 memory地址的表示方式在不同的内存管理模式中是不同的，这里我们考虑2种内存管理模式。第一种是off-heap模式，可以理解为是独立于JVM托管的heap之外利用c-style的malloc从os分配到的memory。这类memory不再由JVM托管，而是类似与c语言的内存管理，可以显示的在分配到的binary datga上进行操作而不是操作java object。由于不再由JVM托管，通过高效的内存管理，可以避免JVM object overhead和Garbage collection的开销。 在Spark中，上面描述的off-heap模式下c-style的memory访问由JVM的sun.misc.Unsafe包提供，例如显示的分配内存，释放以及内存指针。与c语言类似，在off-heap模式下，memory的地址可以简单的由一个64-bits的long类型表示。另外一个是on-heap模式，所有的Java objects都属于该模式。在该模式下，内存的地址由一个64bits的object引用和一个64bits的在该object内部的offset共同表示。
+
+给定内存地址，就和c中的指针一样，我们可以在一个数据结构中指向另外一个数据结构。这对于off-heap模式是ok的，可是在on-heap模式中，由于GC会导致heap结构重新组织，java object的地址不是固定不变的。因此Tungsten利用了类似于os的page table结构对memory进行管理。如下图所示，memory被划分为多个页，内存寻址即是定位相应的内存页和在该页内的偏移。由于物理地址可能在动态的变化，所以需要一个类似于os虚拟内存的逻辑地址然后将逻辑地址映射到实际的物理地址。逻辑地址由一个64bits的long表示，地址的高13bits表示页编号，低51bits表示在改页内部的偏移。映射的过程，实际就是根据页编号去查询页表，然后得到该页的物理地址，然后在物理页地址上加上偏移就得到内存物理地址（这里说的虚拟和物理是在应用层面上进行的又一次抽象，不同于os的虚拟和物理地址，但是思想是一致的）。
+
 ![Memory Management](https://github.com/hustnn/TungstenSecret/blob/master/images/memory-tungsten.png)
+
+对于off-heap和inheap模式，上述虚拟地址表示是一样的，可是物理地址是不同的。在off-heap模式，内存通过一个64bits的绝对内存地址表示。在on-heap模式，内存由相对于一个JVM对象的偏移表示。为了将2者统一起来，定义了一个MemoryLocation来表示off-heap和in-heap的内存地址。MemoryLocation的实现如下所示,对于off-heap的memory，obj为null，offset则为绝对的内存地址，对于on-heap的memory，obj则是JVM对象的基地址，offset则是相对于改对象基地址的偏移。
+
+    /**
+	 * A memory location. Tracked either by a memory address (with off-heap allocation),
+	 * or by an offset from a JVM object (in-heap allocation).
+	 */
+	public class MemoryLocation {
+	
+	  @Nullable
+	  Object obj;
+	
+	  long offset;
+	  
+	  public MemoryLocation(@Nullable Object obj, long offset) {
+	    this.obj = obj;
+	    this.offset = offset;
+	  }
+	
+	  public MemoryLocation() {
+	    this(null, 0);
+	  }
+	
+      /*内存寻址就调用该函数，设置obj和offset*/
+	  public void setObjAndOffset(Object newObj, long newOffset) {
+	    this.obj = newObj;
+	    this.offset = newOffset;
+	  }
+	
+	  public final Object getBaseObject() {
+	    return obj;
+	  }
+	
+	  public final long getBaseOffset() {
+	    return offset;
+	  }
+	}
+
+Tungsten基于上图page table的内存管理主要由TaskMemoryManager实现。这里我主要分析几个主要的功能。
+	
+	这里调用ExecutorMemoryManager进行内存分配，分配得到一个内存页，将其添加到
+	page table中，以遍内存地址映射
+    /**
+	   * Allocate a block of memory that will be tracked in the MemoryManager's page table; this is
+	   * intended for allocating large blocks of memory that will be shared between operators.
+	   */
+	  public MemoryBlock allocatePage(long size) {
+	    if (size > MAXIMUM_PAGE_SIZE_BYTES) {
+	      throw new IllegalArgumentException(
+	        "Cannot allocate a page with more than " + MAXIMUM_PAGE_SIZE_BYTES + " bytes");
+	    }
+	
+	    final int pageNumber;
+	    synchronized (this) {
+	      pageNumber = allocatedPages.nextClearBit(0);
+	      if (pageNumber >= PAGE_TABLE_SIZE) {
+	        throw new IllegalStateException(
+	          "Have already allocated a maximum of " + PAGE_TABLE_SIZE + " pages");
+	      }
+	      allocatedPages.set(pageNumber);
+	    }
+	    final MemoryBlock page = executorMemoryManager.allocate(size);
+	    page.pageNumber = pageNumber;
+	    pageTable[pageNumber] = page;
+	    if (logger.isTraceEnabled()) {
+	      logger.trace("Allocate page number {} ({} bytes)", pageNumber, size);
+	    }
+	    return page;
+	  }
+	 
+	 给定分配到的内存页和页内的偏移，生成一个64bits的逻辑地址
+	 /**
+	   * Given a memory page and offset within that page, encode this address into a 64-bit long.
+	   * This address will remain valid as long as the corresponding page has not been freed.
+	   *
+	   * @param page a data page allocated by {@link TaskMemoryManager#allocate(long)}.
+	   * @param offsetInPage an offset in this page which incorporates the base offset. In other words,
+	   *                     this should be the value that you would pass as the base offset into an
+	   *                     UNSAFE call (e.g. page.baseOffset() + something).
+	   * @return an encoded page address.
+	   */
+	  public long encodePageNumberAndOffset(MemoryBlock page, long offsetInPage) {
+	    if (!inHeap) {
+	      // In off-heap mode, an offset is an absolute address that may require a full 64 bits to
+	      // encode. Due to our page size limitation, though, we can convert this into an offset that's
+	      // relative to the page's base offset; this relative offset will fit in 51 bits.
+	      offsetInPage -= page.getBaseOffset();
+	    }
+	    return encodePageNumberAndOffset(page.pageNumber, offsetInPage);
+	  }
+	
+      高13bits是page number，低位为页内偏移
+	  @VisibleForTesting
+	  public static long encodePageNumberAndOffset(int pageNumber, long offsetInPage) {
+	    assert (pageNumber != -1) : "encodePageNumberAndOffset called with invalid page";
+	    return (((long) pageNumber) << OFFSET_BITS) | (offsetInPage & MASK_LONG_LOWER_51_BITS);
+	  }
+	
+      给定逻辑地址，获取page number
+	  @VisibleForTesting
+	  public static int decodePageNumber(long pagePlusOffsetAddress) {
+	    return (int) ((pagePlusOffsetAddress & MASK_LONG_UPPER_13_BITS) >>> OFFSET_BITS);
+	  }
+	
+      给定逻辑地址，获取页内偏移
+	  private static long decodeOffset(long pagePlusOffsetAddress) {
+	    return (pagePlusOffsetAddress & MASK_LONG_LOWER_51_BITS);
+	  }
+	
+      给定
+	  /**
+	   * Get the page associated with an address encoded by
+	   * {@link TaskMemoryManager#encodePageNumberAndOffset(MemoryBlock, long)}
+	   */
+	  public Object getPage(long pagePlusOffsetAddress) {
+	    if (inHeap) {
+	      final int pageNumber = decodePageNumber(pagePlusOffsetAddress);
+	      assert (pageNumber >= 0 && pageNumber < PAGE_TABLE_SIZE);
+	      final MemoryBlock page = pageTable[pageNumber];
+	      assert (page != null);
+	      assert (page.getBaseObject() != null);
+	      return page.getBaseObject();
+	    } else {
+	      return null;
+	    }
+	  }
+	
+	  /**
+	   * Get the offset associated with an address encoded by
+	   * {@link TaskMemoryManager#encodePageNumberAndOffset(MemoryBlock, long)}
+	   */
+	  public long getOffsetInPage(long pagePlusOffsetAddress) {
+	    final long offsetInPage = decodeOffset(pagePlusOffsetAddress);
+	    if (inHeap) {
+	      return offsetInPage;
+	    } else {
+	      // In off-heap mode, an offset is an absolute address. In encodePageNumberAndOffset, we
+	      // converted the absolute address into a relative address. Here, we invert that operation:
+	      final int pageNumber = decodePageNumber(pagePlusOffsetAddress);
+	      assert (pageNumber >= 0 && pageNumber < PAGE_TABLE_SIZE);
+	      final MemoryBlock page = pageTable[pageNumber];
+	      assert (page != null);
+	      return page.getBaseOffset() + offsetInPage;
+	    }
+	  }
 
 ### 基于Tungsten内存管理的应用 ###
 
