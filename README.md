@@ -335,3 +335,16 @@ Cache-aware computation主要是相对于In-memory computation，L1/L2/L3 CPU ca
 
 GenerateUnsafeProjection -- projects any internal row data structure directly into bytes (UnsafeRow).
 ConvertToUnsafe将Java-object-based row转换为UnSafeRow，具体的转换则是在GenerateUnsafeProjection实现。 代码的生成同样也利用的Java Unsafe对memory直接操作来避免JVM object model的overhead。
+
+
+Flame graphs of Spark to show the power of Whole stage code generation
+
+
+I am trying Spark 2.0. I use the flame graph to profile the CPU cycle usage 
+and find that whole stage code generations are widely used to optimize the performance.
+From the physical plan, we can also see that the mark(*) indicates that part is optimized by the wholeStoageCodeGen.
+
+
+![Flame graph](https://github.com/hustnn/TungstenSecret/blob/master/images/flame.png)
+
+![physical plan](https://github.com/hustnn/TungstenSecret/blob/master/images/plan.png)
