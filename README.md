@@ -345,6 +345,6 @@ and find that whole stage code generations are widely used to optimize the perfo
 From the physical plan, we can also see that the mark(*) indicates that part is optimized by the wholeStoageCodeGen.
 
 
-![Flame graph](https://github.com/hustnn/TungstenSecret/blob/master/images/flame.png)
+![Flame graph](https://github.com/hustnn/TungstenSecret/blob/master/images/flame.jpg)
 
-![physical plan](https://github.com/hustnn/TungstenSecret/blob/master/images/plan.png)
+![physical plan](https://github.com/hustnn/TungstenSecret/blob/master/images/plan.jpg)
