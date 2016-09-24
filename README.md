@@ -340,6 +340,8 @@ ConvertToUnsafe将Java-object-based row转换为UnSafeRow，具体的转换则�
 Flame graphs of Spark to show the power of Whole stage code generation
 
 
+# Profiling of Whole stage code generation with Flame graph #
+
 I am trying Spark 2.0. I use the flame graph to profile the CPU cycle usage 
 and find that whole stage code generations are widely used to optimize the performance.
 From the physical plan, we can also see that the mark(*) indicates that part is optimized by the wholeStoageCodeGen.
